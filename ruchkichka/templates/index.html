@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>6-DOF Robot Arm Controller</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600;700&display=swap');
+
+  :root {
+    --bg: #050a0f;
+    --panel: #080e14;
+    --border: #0d2035;
+    --accent: #00d4ff;
+    --accent2: #ff6b00;
+    --accent3: #00ff9f;
+    --text: #b8d4e8;
+    --dim: #3a5a72;
+    --joint-colors: #00d4ff, #ff6b00, #00ff9f, #ff3d9a, #ffe600, #a855f7;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,212,255,0.015) 2px,
+      rgba(0,212,255,0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  #viewport {
+    flex: 1;
+    position: relative;
+    background: radial-gradient(ellipse at center, #0a1520 0%, #050a0f 70%);
+  }
+
+  #canvas3d {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* HUD overlays */
+  .hud-corner {
+    position: absolute;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    color: var(--dim);
+    padding: 12px;
+  }
+  .hud-tl { top: 0; left: 0; }
+  .hud-tr { top: 0; right: 0; text-align: right; }
+  .hud-bl { bottom: 0; left: 0; }
+
+  .hud-title {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 6px;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,212,255,0.5);
+    text-transform: uppercase;
+  }
+
+  .crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px;
+    height: 20px;
+    pointer-events: none;
+    opacity: 0.3;
+  }
+  .crosshair::before, .crosshair::after {
+    content: '';
+    position: absolute;
+    background: var(--accent);
+  }
+  .crosshair::before { width: 1px; height: 100%; left: 50%; }
+  .crosshair::after { height: 1px; width: 100%; top: 50%; }
+
+  /* Control Panel */
+  #panel {
+    width: 340px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    position: relative;
+  }
+
+  #panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 2px;
+    height: 100%;
+    background: linear-gradient(to bottom, transparent, var(--accent), transparent);
+    opacity: 0.4;
+  }
+
+  .panel-header {
+    padding: 24px 20px 16px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+
+  .panel-header h2 {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 4px;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+
+  .panel-header p {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    color: var(--dim);
+    margin-top: 4px;
+  }
+
+  .joints-container {
+    padding: 16px 20px;
+    flex: 1;
+  }
+
+  .joint-card {
+    margin-bottom: 20px;
+    position: relative;
+  }
+
+  .joint-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .joint-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .joint-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .joint-name {
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .joint-desc {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    color: var(--dim);
+    letter-spacing: 0.5px;
+  }
+
+  .joint-value {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    min-width: 55px;
+    text-align: right;
+  }
+
+  .slider-wrap {
+    position: relative;
+    height: 24px;
+    display: flex;
+    align-items: center;
+  }
+
+  .slider-track {
+    position: absolute;
+    left: 0; right: 0;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: visible;
+  }
+
+  .slider-fill {
+    position: absolute;
+    left: 50%;
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.05s;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 24px;
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    z-index: 2;
+    margin: 0;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--bg);
+    cursor: grab;
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+
+  input[type="range"]::-webkit-slider-thumb:active {
+    cursor: grabbing;
+    transform: scale(1.3);
+  }
+
+  input[type="range"]:focus {
+    outline: none;
+  }
+
+  /* Joint-specific colors */
+  .j1 { --jc: #00d4ff; }
+  .j2 { --jc: #ff6b00; }
+  .j3 { --jc: #00ff9f; }
+  .j4 { --jc: #ff3d9a; }
+  .j5 { --jc: #ffe600; }
+  .j6 { --jc: #a855f7; }
+
+  .joint-card .joint-dot { background: var(--jc); box-shadow: 0 0 6px var(--jc); }
+  .joint-card .joint-name { color: var(--jc); }
+  .joint-card .joint-value { color: var(--jc); }
+  .joint-card .slider-fill { background: var(--jc); opacity: 0.7; }
+  .joint-card input[type="range"]::-webkit-slider-thumb {
+    background: var(--jc);
+    box-shadow: 0 0 8px var(--jc);
+  }
+
+  .angle-limits {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    color: var(--dim);
+    margin-top: 3px;
+  }
+
+  /* Buttons */
+  .panel-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+  }
+
+  .btn {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 10px rgba(0,212,255,0.15);
+  }
+
+  .btn-danger:hover {
+    border-color: var(--accent2);
+    color: var(--accent2);
+    box-shadow: 0 0 10px rgba(255,107,0,0.15);
+  }
+
+  .btn-primary {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* TCP readout */
+  .tcp-panel {
+    margin: 0 20px 16px;
+    padding: 12px;
+    background: rgba(0,212,255,0.03);
+    border: 1px solid var(--border);
+    position: relative;
+  }
+
+  .tcp-panel::before {
+    content: 'END EFFECTOR POSITION';
+    position: absolute;
+    top: -6px;
+    left: 8px;
+    background: var(--panel);
+    padding: 0 6px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    color: var(--dim);
+    letter-spacing: 1px;
+  }
+
+  .tcp-values {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .tcp-val {
+    text-align: center;
+  }
+
+  .tcp-val span {
+    display: block;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  .tcp-val .axis { font-size: 9px; color: var(--dim); margin-bottom: 2px; }
+  .tcp-val .num { font-size: 13px; color: var(--accent3); }
+
+  /* Status indicator */
+  .status-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent3);
+    box-shadow: 0 0 6px var(--accent3);
+    animation: pulse 2s infinite;
+    margin-right: 6px;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+</style>
+</head>
+<body>
+
+<div id="viewport">
+  <canvas id="canvas3d"></canvas>
+  <div class="hud-title">MANIPULATOR SIX</div>
+  <div class="hud-corner hud-tl">
+    <div><span class="status-dot"></span>SYSTEM ONLINE</div>
+    <div style="margin-top:4px;">DRAG TO ORBIT · SCROLL TO ZOOM</div>
+  </div>
+  <div class="hud-corner hud-tr">
+    <div>MODEL: RM-6DOF-001</div>
+    <div style="margin-top:4px;">Rev. 3.14.1</div>
+  </div>
+  <div class="hud-corner hud-bl">
+    <div id="fps-counter">FPS: --</div>
+  </div>
+  <div class="crosshair"></div>
+</div>
+
+<div id="panel">
+  <div class="panel-header">
+    <h2>Joint Control</h2>
+    <p>6-DOF ROBOTIC MANIPULATOR · REAL-TIME</p>
+  </div>
+
+  <div class="joints-container" id="joints-container">
+    <!-- Generated by JS -->
+  </div>
+
+  <div class="tcp-panel">
+    <div class="tcp-values">
+      <div class="tcp-val"><span class="axis">X (mm)</span><span class="num" id="tcp-x">0.00</span></div>
+      <div class="tcp-val"><span class="axis">Y (mm)</span><span class="num" id="tcp-y">0.00</span></div>
+      <div class="tcp-val"><span class="axis">Z (mm)</span><span class="num" id="tcp-z">0.00</span></div>
+    </div>
+  </div>
+
+  <div class="panel-footer">
+    <button class="btn btn-primary" onclick="resetAll()">Reset All</button>
+    <button class="btn btn-danger" onclick="randomPose()">Random</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ===== JOINT CONFIGURATION =====
+const JOINTS = [
+  { id: 'j1', name: 'Joint 1', desc: 'Base Rotation',      min: -180, max: 180, color: '#00d4ff' },
+  { id: 'j2', name: 'Joint 2', desc: 'Shoulder Pitch',     min: -90,  max: 90,  color: '#ff6b00' },
+  { id: 'j3', name: 'Joint 3', desc: 'Elbow Pitch',        min: -135, max: 135, color: '#00ff9f' },
+  { id: 'j4', name: 'Joint 4', desc: 'Wrist Roll',         min: -180, max: 180, color: '#ff3d9a' },
+  { id: 'j5', name: 'Joint 5', desc: 'Wrist Pitch',        min: -90,  max: 90,  color: '#ffe600' },
+  { id: 'j6', name: 'Joint 6', desc: 'End Effector Spin',  min: -360, max: 360, color: '#a855f7' },
+];
+
+const angles = { j1:0, j2:0, j3:0, j4:0, j5:0, j6:0 };
+
+// ===== BUILD CONTROL PANEL =====
+const container = document.getElementById('joints-container');
+JOINTS.forEach(j => {
+  container.innerHTML += `
+  <div class="joint-card ${j.id}">
+    <div class="joint-header">
+      <div class="joint-label">
+        <div class="joint-dot"></div>
+        <div>
+          <div class="joint-name">${j.name}</div>
+          <div class="joint-desc">${j.desc}</div>
+        </div>
+      </div>
+      <div class="joint-value" id="val-${j.id}">0.0°</div>
+    </div>
+    <div class="slider-wrap">
+      <div class="slider-track">
+        <div class="slider-fill" id="fill-${j.id}" style="width:0; left:50%;"></div>
+      </div>
+      <input type="range" id="slider-${j.id}" min="${j.min}" max="${j.max}" value="0" step="0.5">
+    </div>
+    <div class="angle-limits"><span>${j.min}°</span><span>${j.max}°</span></div>
+  </div>`;
+});
+
+// ===== SLIDER EVENTS =====
+JOINTS.forEach(j => {
+  const slider = document.getElementById(`slider-${j.id}`);
+  slider.addEventListener('input', () => {
+    const v = parseFloat(slider.value);
+    angles[j.id] = v;
+    updateSliderDisplay(j.id, v, j.min, j.max, j.color);
+    updateRobotArm();
+    sendToServer();
+  });
+});
+
+function updateSliderDisplay(id, v, min, max, color) {
+  document.getElementById(`val-${id}`).textContent = v.toFixed(1) + '°';
+  const fill = document.getElementById(`fill-${id}`);
+  const range = max - min;
+  const pct = ((v - min) / range) * 100;
+  const center = ((-min) / range) * 100;
+  if (v >= 0) {
+    fill.style.left = center + '%';
+    fill.style.width = (pct - center) + '%';
+  } else {
+    fill.style.left = pct + '%';
+    fill.style.width = (center - pct) + '%';
+  }
+}
+
+// ===== THREE.JS SETUP =====
+const canvas = document.getElementById('canvas3d');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x050a0f, 0.04);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(3, 2.5, 3);
+camera.lookAt(0, 1.5, 0);
+
+// Resize handler
+function resize() {
+  const vp = document.getElementById('viewport');
+  const w = vp.clientWidth, h = vp.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ===== LIGHTING =====
+const ambient = new THREE.AmbientLight(0x0a1520, 2);
+scene.add(ambient);
+
+const mainLight = new THREE.DirectionalLight(0x00d4ff, 1.5);
+mainLight.position.set(5, 8, 5);
+mainLight.castShadow = true;
+mainLight.shadow.mapSize.width = 2048;
+mainLight.shadow.mapSize.height = 2048;
+scene.add(mainLight);
+
+const fillLight = new THREE.DirectionalLight(0xff6b00, 0.5);
+fillLight.position.set(-5, 3, -5);
+scene.add(fillLight);
+
+const rimLight = new THREE.PointLight(0x00ff9f, 0.8, 10);
+rimLight.position.set(-3, 4, -2);
+scene.add(rimLight);
+
+// ===== GRID / FLOOR =====
+const gridHelper = new THREE.GridHelper(10, 20, 0x0d2035, 0x060f18);
+scene.add(gridHelper);
+
+// Ground plane
+const groundGeo = new THREE.PlaneGeometry(10, 10);
+const groundMat = new THREE.MeshStandardMaterial({
+  color: 0x050a0f,
+  roughness: 0.9,
+  metalness: 0.1,
+});
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+ground.position.y = -0.01;
+scene.add(ground);
+
+// ===== MATERIALS =====
+const matLink = new THREE.MeshStandardMaterial({ color: 0x1a2a3a, roughness: 0.3, metalness: 0.8 });
+const matJoint = (color) => new THREE.MeshStandardMaterial({
+  color: new THREE.Color(color),
+  roughness: 0.2,
+  metalness: 0.7,
+  emissive: new THREE.Color(color),
+  emissiveIntensity: 0.3,
+});
+const matEndEffector = new THREE.MeshStandardMaterial({ color: 0xe0e0ff, roughness: 0.1, metalness: 0.95 });
+
+// ===== BUILD ROBOT ARM =====
+// We build a kinematic chain using nested pivot objects
+// Each segment: pivot (rotation point) -> link (visual)
+
+const JOINT_COLORS = ['#00d4ff','#ff6b00','#00ff9f','#ff3d9a','#ffe600','#a855f7'];
+
+// Segment lengths (in scene units)
+const LINK_LENGTHS = [0.6, 0.8, 0.6, 0.4, 0.3, 0.2];
+const LINK_RADII   = [0.08, 0.07, 0.06, 0.05, 0.04, 0.035];
+
+function createLink(length, radius, color) {
+  const group = new THREE.Group();
+
+  // Cylinder along Y axis
+  const geo = new THREE.CylinderGeometry(radius, radius * 1.2, length, 12);
+  geo.translate(0, length / 2, 0);
+  const mesh = new THREE.Mesh(geo, matLink.clone());
+  mesh.castShadow = true;
+  group.add(mesh);
+
+  // Joint sphere at base
+  const jGeo = new THREE.SphereGeometry(radius * 1.6, 16, 16);
+  const jMesh = new THREE.Mesh(jGeo, matJoint(color));
+  jMesh.castShadow = true;
+  group.add(jMesh);
+
+  // Glow ring
+  const ringGeo = new THREE.TorusGeometry(radius * 2, radius * 0.25, 8, 32);
+  const ringMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color),
+    emissive: new THREE.Color(color),
+    emissiveIntensity: 0.8,
+    transparent: true,
+    opacity: 0.6,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  group.add(ring);
+
+  return { group, topY: length };
+}
+
+// Build chain
+const pivots = [];
+const links = [];
+
+// Base pedestal
+const baseGeo = new THREE.CylinderGeometry(0.2, 0.25, 0.15, 16);
+const baseMesh = new THREE.Mesh(baseGeo, matJoint('#00d4ff'));
+baseMesh.position.y = 0.075;
+baseMesh.castShadow = true;
+scene.add(baseMesh);
+
+let parent = scene;
+let yOffset = 0.15;
+
+for (let i = 0; i < 6; i++) {
+  const pivot = new THREE.Group();
+  pivot.position.y = yOffset;
+
+  const linkData = createLink(LINK_LENGTHS[i], LINK_RADII[i], JOINT_COLORS[i]);
+
+  // Joints 1,4,6: rotate around Y (twist)
+  // Joints 2,3,5: rotate around Z (bend)
+  pivot.userData.axis = (i === 0 || i === 3 || i === 5) ? 'y' : 'z';
+
+  parent.add(pivot);
+  pivot.add(linkData.group);
+
+  pivots.push(pivot);
+  links.push(linkData);
+
+  parent = pivot;
+  yOffset = linkData.topY;
+}
+
+// End effector
+const eeGroup = new THREE.Group();
+eeGroup.position.y = LINK_LENGTHS[5];
+pivots[5].add(eeGroup);
+
+// Gripper fingers
+function addFinger(x) {
+  const fGeo = new THREE.BoxGeometry(0.015, 0.12, 0.02);
+  fGeo.translate(0, 0.06, 0);
+  const f = new THREE.Mesh(fGeo, matEndEffector);
+  f.position.set(x, 0, 0);
+  eeGroup.add(f);
+}
+addFinger(-0.035);
+addFinger(0.035);
+const eeConnector = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 0.04), matEndEffector);
+eeGroup.add(eeConnector);
+
+// Glowing tip
+const tipGeo = new THREE.SphereGeometry(0.025, 8, 8);
+const tipMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 1 });
+const tip = new THREE.Mesh(tipGeo, tipMat);
+eeGroup.add(tip);
+
+// ===== UPDATE ROBOT FROM ANGLES =====
+function updateRobotArm() {
+  const keys = ['j1','j2','j3','j4','j5','j6'];
+  keys.forEach((k, i) => {
+    const rad = THREE.MathUtils.degToRad(angles[k]);
+    const pivot = pivots[i];
+    if (pivot.userData.axis === 'y') {
+      pivot.rotation.y = rad;
+    } else {
+      pivot.rotation.z = rad;
+    }
+  });
+  updateTCP();
+}
+
+function updateTCP() {
+  // Get world position of end effector
+  const pos = new THREE.Vector3();
+  eeGroup.getWorldPosition(pos);
+  document.getElementById('tcp-x').textContent = (pos.x * 1000).toFixed(1);
+  document.getElementById('tcp-y').textContent = (pos.z * 1000).toFixed(1);
+  document.getElementById('tcp-z').textContent = (pos.y * 1000).toFixed(1);
+}
+
+// ===== ORBIT CONTROLS (manual implementation) =====
+let isDragging = false, lastX = 0, lastY = 0;
+let spherical = { theta: Math.PI / 4, phi: Math.PI / 3, radius: 5 };
+
+canvas.addEventListener('mousedown', e => { isDragging = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener('mouseup', () => isDragging = false);
+window.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  spherical.theta -= dx * 0.005;
+  spherical.phi = Math.max(0.1, Math.min(Math.PI * 0.85, spherical.phi - dy * 0.005));
+  lastX = e.clientX; lastY = e.clientY;
+  updateCamera();
+});
+canvas.addEventListener('wheel', e => {
+  spherical.radius = Math.max(1.5, Math.min(12, spherical.radius + e.deltaY * 0.005));
+  updateCamera();
+});
+
+// Touch support
+canvas.addEventListener('touchstart', e => { isDragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; });
+window.addEventListener('touchend', () => isDragging = false);
+window.addEventListener('touchmove', e => {
+  if (!isDragging) return;
+  const dx = e.touches[0].clientX - lastX, dy = e.touches[0].clientY - lastY;
+  spherical.theta -= dx * 0.005;
+  spherical.phi = Math.max(0.1, Math.min(Math.PI * 0.85, spherical.phi - dy * 0.005));
+  lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+  updateCamera();
+});
+
+function updateCamera() {
+  camera.position.x = spherical.radius * Math.sin(spherical.phi) * Math.cos(spherical.theta);
+  camera.position.y = spherical.radius * Math.cos(spherical.phi) + 1;
+  camera.position.z = spherical.radius * Math.sin(spherical.phi) * Math.sin(spherical.theta);
+  camera.lookAt(0, 1.5, 0);
+}
+updateCamera();
+
+// ===== API COMMUNICATION =====
+let sendTimeout = null;
+function sendToServer() {
+  clearTimeout(sendTimeout);
+  sendTimeout = setTimeout(() => {
+    fetch('/api/joints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(angles)
+    });
+  }, 50);
+}
+
+// ===== CONTROL FUNCTIONS =====
+function resetAll() {
+  JOINTS.forEach(j => {
+    angles[j.id] = 0;
+    document.getElementById(`slider-${j.id}`).value = 0;
+    updateSliderDisplay(j.id, 0, j.min, j.max, j.color);
+  });
+  updateRobotArm();
+  fetch('/api/reset', { method: 'POST' });
+}
+
+function randomPose() {
+  JOINTS.forEach(j => {
+    const v = Math.random() * (j.max - j.min) + j.min;
+    angles[j.id] = v;
+    document.getElementById(`slider-${j.id}`).value = v;
+    updateSliderDisplay(j.id, v, j.min, j.max, j.color);
+  });
+  updateRobotArm();
+  sendToServer();
+}
+
+// ===== RENDER LOOP =====
+let lastTime = performance.now();
+let frameCount = 0, fpsTime = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const now = performance.now();
+  const dt = now - lastTime;
+  lastTime = now;
+  frameCount++;
+  fpsTime += dt;
+  if (fpsTime >= 500) {
+    document.getElementById('fps-counter').textContent = `FPS: ${Math.round(frameCount * 1000 / fpsTime)}`;
+    frameCount = 0; fpsTime = 0;
+  }
+
+  // Subtle rim light animation
+  rimLight.position.x = Math.sin(now * 0.0005) * 3;
+  rimLight.position.z = Math.cos(now * 0.0005) * 3;
+
+  renderer.render(scene, camera);
+}
+
+updateRobotArm();
+animate();
+</script>
+</body>
+</html>
